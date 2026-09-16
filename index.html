@@ -344,7 +344,11 @@ function wireSettings() {
   for (const [box, key] of [[ui.seconds, "seconds"], [ui.freq, "freq"], [ui.voice, "voice"]]) {
     for (const b of box.querySelectorAll("button")) {
       b.setAttribute("aria-pressed", String(Number(b.dataset.value) === settings[key]));
-      b.addEventListener("click", () => { settings[key] = Number(b.dataset.value); saveSettings(); press(box, b); });
+      b.addEventListener("click", () => {
+        settings[key] = Number(b.dataset.value);
+        saveSettings(); press(box, b);
+        if (key === "voice" && settings.voice) speech.say("проверка");
+      });
     }
   }
 }
@@ -478,11 +482,21 @@ const speech = {
   spoken: -1,        // index of the word already spoken this round
   last: "",          // retried once if Chrome swallows the first utterance
 
+  list: [],
+
   pick() {
     if (!("speechSynthesis" in window)) return;
     const all = speechSynthesis.getVoices();
     if (!all.length) return;                        // list arrives asynchronously
-    this.voice = all.find((v) => /^ru/i.test(v.lang)) || null;
+    this.list = all.filter((v) => /^ru/i.test(v.lang));
+    /* Chrome on Windows lists the Microsoft SAPI voices (Irina, Pavel), fires
+       start and end for them, and plays no audio at all — so prefer Google's
+       voice on desktop. ?voice=<substring> overrides for testing. On phones
+       there is no Google entry and the system voice, which works, is taken. */
+    const want = qs.get("voice");
+    this.voice = (want && this.list.find((v) => v.name.toLowerCase().includes(want.toLowerCase())))
+      || this.list.find((v) => /google/i.test(v.name))
+      || this.list[0] || null;
     this.checked = true;
     showVoiceState();
   },
@@ -534,10 +548,10 @@ if ("speechSynthesis" in window) {
   setTimeout(() => speech.pick(), 1000);            // some browsers never fire the event
 }
 function showVoiceState() {
-  const missing = speech.checked && !speech.voice;
   const unsupported = !("speechSynthesis" in window);
+  const missing = speech.checked && !speech.voice;
   const msg = unsupported ? "Браузер не поддерживает синтез речи."
-    : missing ? "Русский голос в системе не найден — попробуем всё равно, но звука может не быть."
+    : missing ? "Русский голос в системе не найден — слова не озвучиваются."
     : "";
   ui.voiceNote.textContent = msg;
   ui.voiceNote.classList.toggle("hidden", !msg);
