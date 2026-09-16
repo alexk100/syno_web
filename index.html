@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Игра в синонимы</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Plain on purpose. All visual decisions live in these tokens and ~25 classes;
+   the DOM structure and class names are the contract a restyle keeps.
+--------------------------------------------------------------------------- */
+:root {
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --line: #d8d8d8;
+  --accent: #2f5fd0; --surface: #f5f5f5; --radius: 8px; --gap: 16px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --tap: 44px;                        /* minimum touch target */
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#151515; --fg:#ededed; --muted:#9a9a9a; --line:#333; --accent:#7ea2f0; --surface:#1f1f1f; }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  padding: calc(var(--gap) + env(safe-area-inset-top)) calc(var(--gap) + env(safe-area-inset-right))
+           calc(var(--gap) + env(safe-area-inset-bottom)) calc(var(--gap) + env(safe-area-inset-left));
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: 17px; line-height: 1.45;
+  display: flex; justify-content: center;
+  overscroll-behavior-y: contain;
+}
+.app { width: 100%; max-width: 560px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 var(--gap); }
+h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+.muted { color: var(--muted); font-size: 14px; }
+.hidden { display: none !important; }
+
+button {
+  font: inherit; color: inherit; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 14px; min-height: var(--tap);
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+button[aria-pressed="true"], button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: default; }
+@media (hover: hover) { button:hover { border-color: var(--fg); } }
+
+fieldset { border: 0; padding: 0; margin: 0 0 20px; }
+legend { padding: 0; margin-bottom: 8px; font-size: 14px; color: var(--muted); }
+.letters { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tap), 1fr)); gap: 6px; }
+.letters button { padding: 8px 0; text-align: center; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.row > button { flex: 1 1 auto; }
+
+/* play — one mutable surface (§5) */
+.stage {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: clamp(20px, 6vw, 36px) 16px; text-align: center;
+  min-height: 46vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+}
+.stage-letter { font-size: 15px; color: var(--muted); }
+.stage-word { font-size: clamp(30px, 10vw, 46px); font-weight: 600; line-height: 1.1; overflow-wrap: anywhere; }
+.stage-count { font-size: clamp(48px, 18vw, 72px); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stage-seconds { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.bar { width: 100%; height: 5px; background: var(--surface); border-radius: 3px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+
+/* reveal */
+.task { border-top: 1px solid var(--line); padding: 14px 0; }
+.task:first-of-type { border-top: 0; }
+.prompt { font-weight: 600; margin-bottom: 8px; }
+.answers { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.answer {
+  display: inline-flex; align-items: center; gap: 8px; min-height: var(--tap);
+  background: var(--surface); border: 1px solid transparent;
+  border-radius: var(--radius); padding: 6px 12px; text-align: left;
+}
+button.answer { cursor: pointer; }
+.gloss { font-size: 13px; color: var(--muted); }
+.freq { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+.freq i { width: 3px; background: var(--line); border-radius: 1px; height: 100%; }
+.freq i.on { background: var(--accent); }
+
+dialog {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg); color: var(--fg); padding: 20px;
+  max-width: 420px; width: calc(100% - 32px);
+}
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog ol { margin: 0 0 12px; padding-left: 20px; }
+@media (max-width: 480px) {          /* bottom sheet on phones */
+  dialog {
+    width: 100%; max-width: none; margin: 0 0 0 0; top: auto; bottom: 0;
+    border-radius: 14px 14px 0 0; border-bottom: 0;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  }
+}
+.dialog-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.dialog-head strong { font-size: 20px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <h1>Игра в синонимы</h1>
+
+  <!-- setup ---------------------------------------------------------------- -->
+  <section id="setup">
+    <p class="muted">Назовите вслух синоним на заданную букву, пока идёт время. Ответы покажутся в конце.</p>
+
+    <fieldset>
+      <legend>Буква</legend>
+      <div class="row" style="margin-bottom:6px"><button type="button" id="letter-any" aria-pressed="true">Любая</button></div>
+      <div class="letters" id="letters"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Сложность</legend>
+      <div class="row" id="bands"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Секунд на слово</legend>
+      <div class="row" id="seconds">
+        <button type="button" data-value="3">3</button>
+        <button type="button" data-value="5">5</button>
+        <button type="button" data-value="7">7</button>
+        <button type="button" data-value="10">10</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Показывать частотность слова</legend>
+      <div class="row" id="freq">
+        <button type="button" data-value="1">Да</button>
+        <button type="button" data-value="0">Нет</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Озвучивать слово</legend>
+      <div class="row" id="voice">
+        <button type="button" data-value="1">Да</button>
+        <button type="button" data-value="0">Нет</button>
+      </div>
+      <p class="muted hidden" id="voice-note" style="margin:8px 0 0"></p>
+    </fieldset>
+
+    <button type="button" class="primary" id="start" style="width:100%">Играть</button>
+    <p class="muted" id="setup-note" style="margin-top:12px"></p>
+  </section>
+
+  <!-- play ----------------------------------------------------------------- -->
+  <section id="play" class="hidden">
+    <div class="stage" aria-live="polite">
+      <div class="stage-letter" id="stage-letter"></div>
+      <div class="stage-count hidden" id="stage-count"></div>
+      <div class="stage-word hidden" id="stage-word"></div>
+      <div class="stage-seconds hidden" id="stage-seconds"></div>
+      <div class="bar"><span id="bar"></span></div>
+      <div class="muted" id="stage-progress"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button type="button" id="pause">Пауза</button>
+      <button type="button" id="skip">Дальше</button>
+      <button type="button" id="stop">Стоп</button>
+    </div>
+  </section>
+
+  <!-- reveal --------------------------------------------------------------- -->
+  <section id="reveal" class="hidden">
+    <h2 id="reveal-title"></h2>
+    <p class="muted hidden" id="reveal-note"></p>
+    <div id="reveal-tasks"></div>
+    <div class="row" style="margin-top:20px">
+      <button type="button" class="primary" id="again">Ещё раунд</button>
+      <button type="button" id="back">Настройки</button>
+    </div>
+  </section>
+
+  <dialog id="word-dialog">
+    <div class="dialog-head"><strong id="dlg-word"></strong><span class="muted" id="dlg-meta"></span></div>
+    <div id="dlg-body"></div>
+    <div class="row">
+      <button type="button" id="dlg-audio" class="hidden">Произношение</button>
+      <button type="button" id="dlg-close">Закрыть</button>
+    </div>
+    <p class="muted" style="margin:12px 0 0">Определения: Merriam-Webster.</p>
+  </dialog>
+</div>
+
+<script>
+"use strict";
+/* ===========================================================================
+   Static build. No server: the game reads pre-generated sets from JSON files
+   produced by `python -m synonyms.cli export-web`. Only the dictionary needs a
+   backend, and that is a Cloudflare Worker holding the MW key.
+
+     data/index.json              letters, bands, counts, build id
+     data/sets/<letter>-<band>.json
+     DICT_URL/word?en=sound       -> worker
+
+   Round semantics are unchanged from game-client-architecture.md: fixed round,
+   no input, no scoring, deadline-based timing, reveal at the end.
+   =========================================================================== */
+
+const qs = new URLSearchParams(location.search);
+
+/* ===========================================================================
+   Cloudflare Worker holding the MW key (see worker/SETUP.md). No trailing
+   slash. A ?dict=... in the address bar overrides it for quick testing;
+   an empty string switches the dictionary off — words render without taps.
+   =========================================================================== */
+const DICT_URL = "https://syno-dict.alexk100.workers.dev";
+
+const CONFIG = {
+  data: qs.get("data") || "data",
+  dict: qs.get("dict") || DICT_URL,
+  intro: int(qs.get("intro"), 3),
+};
+function int(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : d; }
+
+const BAND_LABEL = { easy: "Лёгкая", medium: "Средняя", hard: "Сложная" };
+const el = (id) => document.getElementById(id);
+const ui = {
+  setup: el("setup"), play: el("play"), reveal: el("reveal"),
+  letters: el("letters"), letterAny: el("letter-any"), bands: el("bands"),
+  seconds: el("seconds"), freq: el("freq"), voice: el("voice"), voiceNote: el("voice-note"),
+  start: el("start"), setupNote: el("setup-note"),
+  stageLetter: el("stage-letter"), count: el("stage-count"), word: el("stage-word"),
+  secs: el("stage-seconds"), bar: el("bar"), progress: el("stage-progress"),
+  pause: el("pause"), skip: el("skip"), stop: el("stop"),
+  revealTitle: el("reveal-title"), revealNote: el("reveal-note"), revealTasks: el("reveal-tasks"),
+  again: el("again"), back: el("back"),
+  dialog: el("word-dialog"), dlgWord: el("dlg-word"), dlgMeta: el("dlg-meta"),
+  dlgBody: el("dlg-body"), dlgAudio: el("dlg-audio"), dlgClose: el("dlg-close"),
+};
+
+const settings = loadSettings();
+const state = { index: null, letter: "", band: "", round: null, clock: null, seen: loadSeen(), demo: false };
+
+function loadSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem("syno.settings") || "{}"); } catch (_) {}
+  return {
+    seconds: [3, 5, 7, 10].includes(s.seconds) ? s.seconds : 7,
+    freq: s.freq !== 0 ? 1 : 0,
+    voice: s.voice !== 0 ? 1 : 0,
+    band: s.band || "",
+  };
+}
+function saveSettings() {
+  try { localStorage.setItem("syno.settings", JSON.stringify(settings)); } catch (_) {}
+}
+/* Seen sets are keyed by build id: a re-export changes the id and the history
+   resets cleanly instead of pointing at renumbered sets (§2.2). */
+function loadSeen() {
+  try { return new Set(JSON.parse(localStorage.getItem("syno.seen") || "{}").ids || []); } catch (_) { return new Set(); }
+}
+function saveSeen() {
+  if (!state.index) return;
+  try {
+    localStorage.setItem("syno.seen", JSON.stringify({ build: state.index.build, ids: [...state.seen].slice(-500) }));
+  } catch (_) {}
+}
+
+const DEMO = {
+  build: "demo", words_per_set: 6, bands: ["medium"], freq_levels: 10,
+  letters: { "з": { medium: 1 } },
+  sets: [{ id: "demo", tasks: [
+    { prompt: "шум", answers: [{ w: "звук", en: "sound", ipm: 142.3, f: 9 }, { w: "звон", en: "ring", ipm: 12.4, f: 6 }] },
+    { prompt: "чесание", answers: [{ w: "зуд", en: "itch", ipm: 3.1, f: 4 }] },
+    { prompt: "постройка", answers: [{ w: "здание", en: "building", ipm: 210.0, f: 9 }, { w: "застройка", en: null, ipm: 4.2, f: 5 }] },
+    { prompt: "холод", answers: [{ w: "заморозки", en: "frost", ipm: 2.0, f: 4 }] },
+    { prompt: "просьба", answers: [{ w: "запрос", en: "request", ipm: 60.5, f: 8 }, { w: "заявка", en: "application", ipm: 18.0, f: 7 }] },
+    { prompt: "защита", answers: [{ w: "заслон", en: "barrier", ipm: 1.2, f: 3 }] },
+  ] }],
+};
+
+/* --------------------------------------------------------------- loading -- */
+async function getJSON(url) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+async function boot() {
+  wireSettings();
+  try {
+    state.index = await getJSON(CONFIG.data + "/index.json");
+  } catch (_) {
+    state.index = DEMO; state.demo = true;
+    ui.setupNote.textContent = "Данные не найдены — доступен только демо-раунд.";
+  }
+  buildPickers();
+}
+
+function buildPickers() {
+  const letters = Object.keys(state.index.letters).sort();
+  ui.letters.innerHTML = "";
+  for (const L of letters) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = L.toUpperCase(); b.dataset.value = L;
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => {
+      const off = state.letter === L;
+      state.letter = off ? "" : L;
+      ui.letterAny.setAttribute("aria-pressed", String(off));
+      press(ui.letters, off ? null : b);
+      syncBands();
+    });
+    ui.letters.appendChild(b);
+  }
+  syncBands();
+}
+
+/* Bands offered are the ones that actually exist for the chosen letter — a
+   letter with too few tasks in a band simply has no file (§8). */
+function syncBands() {
+  const avail = state.letter
+    ? Object.keys(state.index.letters[state.letter] || {})
+    : state.index.bands || [];
+  ui.bands.innerHTML = "";
+  const opts = [["", "Любая"]].concat(avail.map((b) => [b, BAND_LABEL[b] || b]));
+  if (!avail.includes(settings.band)) settings.band = "";
+  for (const [value, label] of opts) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.dataset.value = value;
+    b.setAttribute("aria-pressed", String(value === settings.band));
+    b.addEventListener("click", () => { settings.band = value; saveSettings(); press(ui.bands, b); });
+    ui.bands.appendChild(b);
+  }
+}
+
+function press(container, active) {
+  for (const b of container.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === active));
+}
+function wireSettings() {
+  for (const [box, key] of [[ui.seconds, "seconds"], [ui.freq, "freq"], [ui.voice, "voice"]]) {
+    for (const b of box.querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset.value) === settings[key]));
+      b.addEventListener("click", () => { settings[key] = Number(b.dataset.value); saveSettings(); press(box, b); });
+    }
+  }
+}
+
+async function pickRound() {
+  if (state.demo) return { letter: "з", note: DEMO.sets[0].tasks.length + " слов в демо-раунде", tasks: DEMO.sets[0].tasks };
+
+  const letters = Object.keys(state.index.letters);
+  const letter = state.letter || letters[Math.floor(Math.random() * letters.length)];
+  const bands = Object.keys(state.index.letters[letter]);
+  const band = settings.band && bands.includes(settings.band)
+    ? settings.band : bands[Math.floor(Math.random() * bands.length)];
+
+  // ASCII slug from index.json ("з" -> "u0437"); falls back to the letter for
+  // trees exported before slugs existed.
+  const slug = (state.index.slugs || {})[letter] || letter;
+  const file = await getJSON(`${CONFIG.data}/sets/${encodeURIComponent(slug)}-${band}.json`);
+  let pool = file.sets.filter((s) => !state.seen.has(s.id));
+  if (!pool.length) { pool = file.sets; state.seen.clear(); }   // exhausted: repeat rather than refuse
+  const set = pool[Math.floor(Math.random() * pool.length)];
+  state.seen.add(set.id); saveSeen();
+
+  const short = set.tasks.length < (state.index.words_per_set || 10);
+  return {
+    letter: file.letter,
+    note: short ? `только ${set.tasks.length} слов для этой буквы` : "",
+    tasks: set.tasks,
+  };
+}
+
+/* ------------------------------------------------------------ round clock --
+   Deadline-based: one origin for the whole round, so nothing drifts. Skip
+   shifts the origin; pause accumulates an offset.                           */
+function startRound(round) {
+  state.round = round;
+  speech.spoken = -1;
+  const introMs = CONFIG.intro * 1000;
+  const wordMs = settings.seconds * 1000;
+  const c = { origin: performance.now(), pausedAt: 0, lost: 0, raf: 0, key: "", dead: false };
+  state.clock = c;
+
+  ui.stageLetter.textContent = "Буква " + round.letter.toUpperCase();
+  ui.pause.textContent = "Пауза";
+  show(ui.play);
+  keepAwake(true);
+
+  const elapsed = () => (c.pausedAt || performance.now()) - c.origin - c.lost;
+
+  function frame() {
+    if (c.dead) return;
+    const e = elapsed();
+    let key;
+    if (e < introMs) {
+      const left = Math.ceil((introMs - e) / 1000);
+      key = "i" + left;
+      if (key !== c.key) renderIntro(left);
+      setBar((introMs - e) / introMs);
+    } else {
+      const i = Math.floor((e - introMs) / wordMs);
+      if (i >= round.tasks.length) return finish("Ответы");
+      const w = (e - introMs) - i * wordMs;
+      const left = Math.max(1, Math.ceil((wordMs - w) / 1000));
+      key = "w" + i + ":" + left;
+      if (key !== c.key) renderWord(round, i, left);
+      setBar((wordMs - w) / wordMs);
+    }
+    c.key = key;
+    c.raf = requestAnimationFrame(frame);
+  }
+
+  c.skip = () => {
+    speech.stop();
+    const e = elapsed();
+    if (e < introMs) { c.origin -= introMs - e; return; }
+    const i = Math.floor((e - introMs) / wordMs);
+    c.origin -= wordMs - ((e - introMs) - i * wordMs);
+  };
+  c.toggle = (force) => {
+    const wantPause = force === undefined ? !c.pausedAt : force;
+    if (wantPause && !c.pausedAt) {
+      c.pausedAt = performance.now(); cancelAnimationFrame(c.raf); speech.stop();
+      ui.pause.textContent = "Продолжить";
+    } else if (!wantPause && c.pausedAt) {
+      c.lost += performance.now() - c.pausedAt; c.pausedAt = 0;
+      ui.pause.textContent = "Пауза"; c.raf = requestAnimationFrame(frame);
+    }
+  };
+  c.halt = () => { c.dead = true; cancelAnimationFrame(c.raf); keepAwake(false); speech.stop(); };
+  c.raf = requestAnimationFrame(frame);
+}
+
+function setBar(f) { ui.bar.style.transform = "scaleX(" + Math.max(0, Math.min(1, f)).toFixed(4) + ")"; }
+function renderIntro(left) {
+  ui.count.textContent = String(left); ui.count.classList.remove("hidden");
+  ui.word.classList.add("hidden"); ui.secs.classList.add("hidden");
+  ui.progress.textContent = "Приготовьтесь";
+}
+function renderWord(round, i, left) {
+  ui.count.classList.add("hidden");
+  ui.word.textContent = round.tasks[i].prompt; ui.word.classList.remove("hidden");
+  ui.secs.textContent = left + " с"; ui.secs.classList.remove("hidden");
+  ui.progress.textContent = (i + 1) + " из " + round.tasks.length;
+  if (speech.spoken !== i) { speech.spoken = i; speech.say(round.tasks[i].prompt); }
+}
+function show(section) { for (const s of [ui.setup, ui.play, ui.reveal]) s.classList.toggle("hidden", s !== section); }
+
+function finish(title) {
+  if (state.clock) state.clock.halt();
+  renderReveal(state.round, title);
+  show(ui.reveal);
+  ui.again.focus();
+}
+
+/* Screen wake lock — without it a phone sleeps mid-round. */
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && "wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+    else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (_) { /* denied or unsupported: harmless */ }
+}
+
+/* ------------------------------------------------------------- speech ----
+   Browser speech synthesis: no files to host, any word can be spoken, but the
+   voice belongs to the device — Irina on Windows, Milena on iOS, Google on
+   Android — and may be absent entirely. Missing voice = silence, never an error. */
+const speech = {
+  voice: null,
+  current: null,     // held so Chrome can't collect a speaking utterance
+  checked: false,
+  spoken: -1,        // index of the word already spoken this round
+  last: "",          // retried once if Chrome swallows the first utterance
+
+  pick() {
+    if (!("speechSynthesis" in window)) return;
+    const all = speechSynthesis.getVoices();
+    if (!all.length) return;                        // list arrives asynchronously
+    this.voice = all.find((v) => /^ru/i.test(v.lang)) || null;
+    this.checked = true;
+    showVoiceState();
+  },
+
+  /* iOS ignores programmatic speech until one utterance has run inside a real
+     gesture. Chrome wedges on a whitespace-only utterance, so speak a real
+     character at zero volume instead. */
+  unlock() {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(".");
+      u.volume = 0;
+      u.lang = "ru-RU";
+      speechSynthesis.speak(u);
+    } catch (_) {}
+  },
+
+  say(text) {
+    if (!settings.voice || !("speechSynthesis" in window)) return;
+    this.last = text;
+
+    const go = () => {
+      if (this.last !== text) return;               // a newer word won the race
+      const u = new SpeechSynthesisUtterance(text);
+      if (this.voice) u.voice = this.voice;         // no ru voice: let the OS pick by lang
+      u.lang = (this.voice && this.voice.lang) || "ru-RU";
+      u.rate = 1;
+      u.onerror = (e) => { if (e.error !== "interrupted") console.warn("speech:", e.error, text); };
+      this.current = u;                             // held: Chrome collects loose utterances
+      try { speechSynthesis.speak(u); } catch (_) {}
+    };
+
+    /* cancel() poisons the next speak() in Chrome on Windows — the new
+       utterance comes back "interrupted" straight away. So only cancel when
+       something is really talking, and give the engine time to settle. */
+    if (speechSynthesis.speaking || speechSynthesis.pending) {
+      try { speechSynthesis.cancel(); } catch (_) {}
+      setTimeout(go, 150);
+    } else {
+      go();
+    }
+  },
+
+  stop() { try { speechSynthesis.cancel(); } catch (_) {} },
+};
+if ("speechSynthesis" in window) {
+  speechSynthesis.onvoiceschanged = () => speech.pick();
+  speech.pick();
+  setTimeout(() => speech.pick(), 1000);            // some browsers never fire the event
+}
+function showVoiceState() {
+  const missing = speech.checked && !speech.voice;
+  const unsupported = !("speechSynthesis" in window);
+  const msg = unsupported ? "Браузер не поддерживает синтез речи."
+    : missing ? "Русский голос в системе не найден — попробуем всё равно, но звука может не быть."
+    : "";
+  ui.voiceNote.textContent = msg;
+  ui.voiceNote.classList.toggle("hidden", !msg);
+  for (const b of ui.voice.querySelectorAll("button")) b.disabled = unsupported;
+}
+
+/* ----------------------------------------------------------------- reveal -- */
+function renderReveal(round, title) {
+  ui.revealTitle.textContent = title + " · буква " + round.letter.toUpperCase();
+  ui.revealNote.textContent = round.note || "";
+  ui.revealNote.classList.toggle("hidden", !round.note);
+  ui.revealTasks.innerHTML = "";
+
+  for (const task of round.tasks) {
+    const wrap = document.createElement("div"); wrap.className = "task";
+    const p = document.createElement("div"); p.className = "prompt"; p.textContent = task.prompt;
+    wrap.appendChild(p);
+
+    const list = document.createElement("ul"); list.className = "answers";
+    for (const a of task.answers) {
+      const tappable = Boolean(a.en && CONFIG.dict);
+      const node = document.createElement(tappable ? "button" : "span");
+      node.className = "answer";
+      if (tappable) { node.type = "button"; node.addEventListener("click", () => openWord(a)); }
+
+      const w = document.createElement("span"); w.textContent = a.w; node.appendChild(w);
+      if (a.en) { const g = document.createElement("span"); g.className = "gloss"; g.textContent = a.en; node.appendChild(g); }
+      if (settings.freq && a.f) node.appendChild(freqBar(a));
+
+      const li = document.createElement("li"); li.appendChild(node); list.appendChild(li);
+    }
+    wrap.appendChild(list);
+    ui.revealTasks.appendChild(wrap);
+  }
+}
+
+/* 10 ticks, level from the export (log-banded ipm — see export_web.py). */
+function freqBar(a) {
+  const box = document.createElement("span");
+  box.className = "freq";
+  box.title = a.ipm != null ? a.ipm + " ipm" : "";
+  box.setAttribute("aria-label", "частотность " + a.f + " из 10");
+  for (let i = 1; i <= 10; i++) {
+    const tick = document.createElement("i");
+    tick.style.height = (30 + i * 7) + "%";
+    if (i <= a.f) tick.className = "on";
+    box.appendChild(tick);
+  }
+  return box;
+}
+
+/* ------------------------------------------------------------ tap-a-word -- */
+const entries = new Map();      // en -> promise; collapses concurrent taps (§7)
+function fetchEntry(en) {
+  if (!entries.has(en)) {
+    entries.set(en, getJSON(CONFIG.dict.replace(/\/$/, "") + "/word?en=" + encodeURIComponent(en))
+      .catch((e) => { entries.delete(en); throw e; }));
+  }
+  return entries.get(en);
+}
+
+let audio = null;
+async function openWord(a) {
+  ui.dlgWord.textContent = a.w;
+  ui.dlgMeta.textContent = a.en;
+  ui.dlgBody.innerHTML = "<p class='muted'>Загрузка…</p>";
+  ui.dlgAudio.classList.add("hidden");
+  ui.dialog.showModal();
+
+  let entry;
+  try { entry = await fetchEntry(a.en); }
+  catch (_) { ui.dlgBody.innerHTML = "<p class='muted'>Словарь недоступен. Перевод: " + esc(a.en) + "</p>"; return; }
+  if (ui.dlgWord.textContent !== a.w) return;      // dialog moved on
+
+  if (entry.status !== "ok") {
+    const msg = entry.status === "suggestions" && entry.suggestions
+      ? "Точного совпадения нет: " + entry.suggestions.slice(0, 5).join(", ")
+      : entry.status === "notfound" ? "Статьи в словаре нет."
+      : "Словарь недоступен. Перевод: " + a.en;
+    ui.dlgBody.innerHTML = "<p class='muted'>" + esc(msg) + "</p>";
+    return;
+  }
+  ui.dlgMeta.textContent = [entry.headword, entry.pos, entry.respelling && "/" + entry.respelling + "/"]
+    .filter(Boolean).join(" · ");
+  ui.dlgBody.innerHTML = (entry.shortdef || []).length
+    ? "<ol>" + entry.shortdef.map((d) => "<li>" + esc(d) + "</li>").join("") + "</ol>"
+    : "<p class='muted'>Определение не найдено.</p>";
+
+  if (entry.audio_url) {
+    ui.dlgAudio.classList.remove("hidden");
+    ui.dlgAudio.onclick = () => {
+      if (audio) audio.pause();
+      audio = new Audio(entry.audio_url);
+      audio.play().catch(() => {});
+    };
+  }
+}
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* --------------------------------------------------------------- controls -- */
+ui.letterAny.addEventListener("click", () => {
+  state.letter = ""; ui.letterAny.setAttribute("aria-pressed", "true");
+  press(ui.letters, null); syncBands();
+});
+ui.start.addEventListener("click", async () => {
+  ui.start.disabled = true;
+  speech.unlock();                       // must run inside the tap (iOS)
+  try {
+    startRound(await pickRound());
+    if (!state.demo) ui.setupNote.textContent = "";
+  } catch (err) {
+    ui.setupNote.textContent = "Не удалось загрузить набор: " + err.message;
+  } finally { ui.start.disabled = false; }
+});
+ui.pause.addEventListener("click", () => state.clock && state.clock.toggle());
+ui.skip.addEventListener("click", () => state.clock && state.clock.skip());
+ui.stop.addEventListener("click", () => finish("Раунд остановлен"));
+ui.again.addEventListener("click", () => ui.start.click());
+ui.back.addEventListener("click", () => show(ui.setup));
+ui.dlgClose.addEventListener("click", () => ui.dialog.close());
+ui.dialog.addEventListener("close", () => { if (audio) audio.pause(); });
+
+document.addEventListener("visibilitychange", () => {          // call comes in mid-round
+  if (document.hidden && state.clock && !ui.play.classList.contains("hidden")) state.clock.toggle(true);
+});
+document.addEventListener("keydown", (e) => {
+  if (ui.dialog.open) return;
+  if (!ui.play.classList.contains("hidden")) {
+    if (e.code === "Space") { e.preventDefault(); state.clock.toggle(); }
+    if (e.code === "ArrowRight") { e.preventDefault(); state.clock.skip(); }
+    if (e.code === "Escape") { e.preventDefault(); finish("Раунд остановлен"); }
+  } else if (!ui.setup.classList.contains("hidden") && e.code === "Enter") ui.start.click();
+});
+
+boot();
+</script>
+</body>
+</html>
